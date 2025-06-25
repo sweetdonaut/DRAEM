@@ -28,7 +28,7 @@ def train_on_device(obj_names, args):
         os.makedirs(args.log_path)
 
     for obj_name in obj_names:
-        run_name = 'DRAEM_test_'+str(args.lr)+'_'+str(args.epochs)+'_bs'+str(args.bs)+"_"+obj_name+'_'
+        run_name = 'DRAEM_test_'+str(args.lr)+'_'+str(args.epochs)+'_bs'+str(args.bs)+"_RSEM_"
 
         visualizer = TensorboardVisualizer(log_dir=os.path.join(args.log_path, run_name+"/"))
 
@@ -50,10 +50,10 @@ def train_on_device(obj_names, args):
         loss_ssim = SSIM()
         loss_focal = FocalLoss()
 
-        dataset = MVTecDRAEMTrainDataset(args.data_path + obj_name + "/train/good/", args.anomaly_source_path, resize_shape=[256, 256])
-
+        dataset = MVTecDRAEMTrainDataset(args.data_path + "/train/good/", args.anomaly_source_path, resize_shape=[256, 256])
         dataloader = DataLoader(dataset, batch_size=args.bs,
                                 shuffle=True, num_workers=16)
+        print("Dataset size:", len(dataset))
 
         n_iter = 0
         for epoch in range(args.epochs):
@@ -105,57 +105,19 @@ if __name__=="__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--obj_id', action='store', type=int, required=True)
     parser.add_argument('--bs', action='store', type=int, required=True)
     parser.add_argument('--lr', action='store', type=float, required=True)
     parser.add_argument('--epochs', action='store', type=int, required=True)
     parser.add_argument('--gpu_id', action='store', type=int, default=0, required=False)
     parser.add_argument('--data_path', action='store', type=str, required=True)
-    parser.add_argument('--anomaly_source_path', action='store', type=str, required=True)
+    parser.add_argument('--anomaly_source_path', action='store', type=str, required=False, default=None,
+                        help='Path to anomaly source images (e.g., DTD dataset). If not provided, random noise will be used.')
     parser.add_argument('--checkpoint_path', action='store', type=str, required=True)
     parser.add_argument('--log_path', action='store', type=str, required=True)
     parser.add_argument('--visualize', action='store_true')
 
     args = parser.parse_args()
 
-    obj_batch = [['capsule'],
-                 ['bottle'],
-                 ['carpet'],
-                 ['leather'],
-                 ['pill'],
-                 ['transistor'],
-                 ['tile'],
-                 ['cable'],
-                 ['zipper'],
-                 ['toothbrush'],
-                 ['metal_nut'],
-                 ['hazelnut'],
-                 ['screw'],
-                 ['grid'],
-                 ['wood']
-                 ]
-
-    if int(args.obj_id) == -1:
-        obj_list = ['capsule',
-                     'bottle',
-                     'carpet',
-                     'leather',
-                     'pill',
-                     'transistor',
-                     'tile',
-                     'cable',
-                     'zipper',
-                     'toothbrush',
-                     'metal_nut',
-                     'hazelnut',
-                     'screw',
-                     'grid',
-                     'wood'
-                     ]
-        picked_classes = obj_list
-    else:
-        picked_classes = obj_batch[int(args.obj_id)]
-
     with torch.cuda.device(args.gpu_id):
-        train_on_device(picked_classes, args)
+        train_on_device(['RSEM'], args)
 

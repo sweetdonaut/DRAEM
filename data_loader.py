@@ -4,7 +4,7 @@ from torch.utils.data import Dataset
 import torch
 import cv2
 import glob
-import imgaug.augmenters as iaa
+import albumentations as A
 from perlin import rand_perlin_2d_np
 
 class MVTecDRAEMTestDataset(Dataset):
@@ -63,33 +63,42 @@ class MVTecDRAEMTestDataset(Dataset):
 
 class MVTecDRAEMTrainDataset(Dataset):
 
-    def __init__(self, root_dir, anomaly_source_path, resize_shape=None):
+    def __init__(self, root_dir, anomaly_source_path=None, resize_shape=None):
         """
         Args:
             root_dir (string): Directory with all the images.
-            transform (callable, optional): Optional transform to be applied
-                on a sample.
+            anomaly_source_path (string, optional): Path to anomaly source images (e.g., DTD dataset).
+                                                   If None, uses random noise.
+            resize_shape (list, optional): [height, width] to resize images.
         """
         self.root_dir = root_dir
         self.resize_shape=resize_shape
+        self.anomaly_source_path = anomaly_source_path
 
         self.image_paths = sorted(glob.glob(root_dir+"/*.jpg"))
 
-        self.anomaly_source_paths = sorted(glob.glob(anomaly_source_path+"/*/*.jpg"))
+        if anomaly_source_path is not None:
+            self.anomaly_source_paths = sorted(glob.glob(anomaly_source_path+"/*/*.jpg"))
+            if len(self.anomaly_source_paths) == 0:
+                print(f"Warning: No anomaly source images found in {anomaly_source_path}")
+                print("Will use random noise instead.")
+                self.anomaly_source_paths = None
+        else:
+            self.anomaly_source_paths = None
 
-        self.augmenters = [iaa.GammaContrast((0.5,2.0),per_channel=True),
-                      iaa.MultiplyAndAddToBrightness(mul=(0.8,1.2),add=(-30,30)),
-                      iaa.pillike.EnhanceSharpness(),
-                      iaa.AddToHueAndSaturation((-50,50),per_channel=True),
-                      iaa.Solarize(0.5, threshold=(32,128)),
-                      iaa.Posterize(),
-                      iaa.Invert(),
-                      iaa.pillike.Autocontrast(),
-                      iaa.pillike.Equalize(),
-                      iaa.Affine(rotate=(-45, 45))
+        self.augmenters = [A.RandomGamma(gamma_limit=(50, 200), p=1.0),
+                      A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=1.0),
+                      A.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=1.0),
+                      A.HueSaturationValue(hue_shift_limit=50, sat_shift_limit=50, val_shift_limit=0, p=1.0),
+                      A.Solarize(p=1.0),
+                      A.Posterize(num_bits=4, p=1.0),
+                      A.InvertImg(p=1.0),
+                      A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
+                      A.Equalize(p=1.0),
+                      A.Rotate(limit=45, p=1.0)
                       ]
 
-        self.rot = iaa.Sequential([iaa.Affine(rotate=(-90, 90))])
+        self.rot = A.Rotate(limit=90, p=1.0)
 
 
     def __len__(self):
@@ -98,25 +107,32 @@ class MVTecDRAEMTrainDataset(Dataset):
 
     def randAugmenter(self):
         aug_ind = np.random.choice(np.arange(len(self.augmenters)), 3, replace=False)
-        aug = iaa.Sequential([self.augmenters[aug_ind[0]],
-                              self.augmenters[aug_ind[1]],
-                              self.augmenters[aug_ind[2]]]
-                             )
+        aug = A.Compose([self.augmenters[aug_ind[0]],
+                         self.augmenters[aug_ind[1]],
+                         self.augmenters[aug_ind[2]]])
         return aug
 
-    def augment_image(self, image, anomaly_source_path):
+    def augment_image(self, image, anomaly_source_path=None):
         aug = self.randAugmenter()
         perlin_scale = 6
         min_perlin_scale = 0
-        anomaly_source_img = cv2.imread(anomaly_source_path)
-        anomaly_source_img = cv2.resize(anomaly_source_img, dsize=(self.resize_shape[1], self.resize_shape[0]))
-
-        anomaly_img_augmented = aug(image=anomaly_source_img)
+        
+        if anomaly_source_path is not None:
+            # Use external anomaly source (e.g., DTD dataset)
+            anomaly_source_img = cv2.imread(anomaly_source_path)
+            anomaly_source_img = cv2.resize(anomaly_source_img, dsize=(self.resize_shape[1], self.resize_shape[0]))
+            anomaly_img_augmented = aug(image=anomaly_source_img)['image']
+        else:
+            # Use random noise when no anomaly source is provided
+            # Generate random colored noise
+            noise = np.random.rand(self.resize_shape[0], self.resize_shape[1], 3) * 255
+            noise = noise.astype(np.uint8)
+            anomaly_img_augmented = aug(image=noise)['image']
         perlin_scalex = 2 ** (torch.randint(min_perlin_scale, perlin_scale, (1,)).numpy()[0])
         perlin_scaley = 2 ** (torch.randint(min_perlin_scale, perlin_scale, (1,)).numpy()[0])
 
         perlin_noise = rand_perlin_2d_np((self.resize_shape[0], self.resize_shape[1]), (perlin_scalex, perlin_scaley))
-        perlin_noise = self.rot(image=perlin_noise)
+        perlin_noise = self.rot(image=perlin_noise)['image']
         threshold = 0.5
         perlin_thr = np.where(perlin_noise > threshold, np.ones_like(perlin_noise), np.zeros_like(perlin_noise))
         perlin_thr = np.expand_dims(perlin_thr, axis=2)
@@ -147,7 +163,7 @@ class MVTecDRAEMTrainDataset(Dataset):
 
         do_aug_orig = torch.rand(1).numpy()[0] > 0.7
         if do_aug_orig:
-            image = self.rot(image=image)
+            image = self.rot(image=image)['image']
 
         image = np.array(image).reshape((image.shape[0], image.shape[1], image.shape[2])).astype(np.float32) / 255.0
         augmented_image, anomaly_mask, has_anomaly = self.augment_image(image, anomaly_source_path)
@@ -158,9 +174,15 @@ class MVTecDRAEMTrainDataset(Dataset):
 
     def __getitem__(self, idx):
         idx = torch.randint(0, len(self.image_paths), (1,)).item()
-        anomaly_source_idx = torch.randint(0, len(self.anomaly_source_paths), (1,)).item()
-        image, augmented_image, anomaly_mask, has_anomaly = self.transform_image(self.image_paths[idx],
-                                                                           self.anomaly_source_paths[anomaly_source_idx])
+        
+        if self.anomaly_source_paths is not None:
+            anomaly_source_idx = torch.randint(0, len(self.anomaly_source_paths), (1,)).item()
+            anomaly_source_path = self.anomaly_source_paths[anomaly_source_idx]
+        else:
+            anomaly_source_path = None
+            
+        image, augmented_image, anomaly_mask, has_anomaly = self.transform_image(
+            self.image_paths[idx], anomaly_source_path)
         sample = {'image': image, "anomaly_mask": anomaly_mask,
                   'augmented_image': augmented_image, 'has_anomaly': has_anomaly, 'idx': idx}
 
