@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# DRAEM 統一視覺化腳本
+# DRAEM OpticalDataset 統一視覺化腳本
 # 支援選擇模型、選擇測試類別、批次處理
 
 # 預設值
-DATA_PATH="./RSEM_dataset/test"
+DATA_PATH="./OpticalDataset/test"
 CHECKPOINT_PATH="./checkpoints"
 GPU_ID=0
 MAX_IMAGES=10
@@ -12,10 +12,10 @@ CUSTOM_DATA_PATH=""
 
 # 顯示使用說明
 show_help() {
-    echo "DRAEM 視覺化工具"
+    echo "DRAEM OpticalDataset 視覺化工具"
     echo ""
     echo "使用方法："
-    echo "  ./visualize.sh [選項]"
+    echo "  ./test_optical.sh [選項]"
     echo ""
     echo "選項："
     echo "  -m, --model MODEL_NAME     指定模型名稱（不含 .pth）"
@@ -23,35 +23,35 @@ show_help() {
     echo "  -a, --all                  處理所有類別"
     echo "  -n, --num NUM              每個類別最多處理幾張圖片（預設：10）"
     echo "  -g, --gpu GPU_ID           指定 GPU ID（預設：0）"
-    echo "  -d, --data DATA_PATH       指定資料集路徑（預設：./RSEM_dataset/test）"
+    echo "  -d, --data DATA_PATH       指定資料集路徑（預設：./OpticalDataset/test）"
     echo "  -l, --list                 列出可用的模型和類別"
     echo "  -h, --help                 顯示此說明"
     echo ""
     echo "範例："
     echo "  # 列出可用的模型和類別"
-    echo "  ./visualize.sh -l"
+    echo "  ./test_optical.sh -l"
     echo ""
     echo "  # 使用最新模型，處理所有類別"
-    echo "  ./visualize.sh -a"
+    echo "  ./test_optical.sh -a"
     echo ""
     echo "  # 指定模型，處理特定類別"
-    echo "  ./visualize.sh -m DRAEM_test_0.0001_700_bs8_RSEM_ -c bent -c broken"
+    echo "  ./test_optical.sh -m DRAEM_optical_0.0001_700_bs3_ch1_960x192 -c bent -c broken"
     echo ""
     echo "  # 處理單一類別，每類別5張圖"
-    echo "  ./visualize.sh -c good -n 5"
+    echo "  ./test_optical.sh -c good -n 5"
 }
 
 # 列出可用資源
 list_resources() {
-    echo "========== 可用的模型 =========="
+    echo "========== 可用的 OpticalDataset 模型 =========="
     if [ -d "$CHECKPOINT_PATH" ]; then
-        models=$(ls -1 "$CHECKPOINT_PATH"/*.pth 2>/dev/null | grep -v "_seg" | sed 's/.*\///g' | sed 's/\.pth$//')
+        models=$(ls -1 "$CHECKPOINT_PATH"/DRAEM_optical_*.pth 2>/dev/null | grep -v "_seg" | sed 's/.*\///g' | sed 's/\.pth$//')
         if [ -z "$models" ]; then
             echo "（無）"
         else
             echo "$models" | nl -w2 -s'. '
             # 找出最新的模型
-            latest=$(ls -t "$CHECKPOINT_PATH"/*.pth 2>/dev/null | grep -v "_seg" | head -1 | sed 's/.*\///g' | sed 's/\.pth$//')
+            latest=$(ls -t "$CHECKPOINT_PATH"/DRAEM_optical_*.pth 2>/dev/null | grep -v "_seg" | head -1 | sed 's/.*\///g' | sed 's/\.pth$//')
             echo ""
             echo "最新模型：$latest"
         fi
@@ -125,12 +125,12 @@ if [ -n "$CUSTOM_DATA_PATH" ]; then
     DATA_PATH="$CUSTOM_DATA_PATH"
 fi
 
-# 如果沒有指定模型，使用最新的
+# 如果沒有指定模型，使用最新的 optical 模型
 if [ -z "$MODEL_NAME" ]; then
-    LATEST_MODEL=$(ls -t "$CHECKPOINT_PATH"/*.pth 2>/dev/null | grep -v "_seg" | head -1)
+    LATEST_MODEL=$(ls -t "$CHECKPOINT_PATH"/DRAEM_optical_*.pth 2>/dev/null | grep -v "_seg" | head -1)
     if [ -z "$LATEST_MODEL" ]; then
-        echo "錯誤：找不到任何模型檔案"
-        echo "請先訓練模型或使用 -m 指定模型名稱"
+        echo "錯誤：找不到任何 OpticalDataset 模型檔案"
+        echo "請先使用 train_optical.sh 訓練模型或使用 -m 指定模型名稱"
         exit 1
     fi
     MODEL_NAME=$(basename "$LATEST_MODEL" .pth)
@@ -158,7 +158,7 @@ fi
 # 開始處理
 echo ""
 echo "=========================================="
-echo "DRAEM 視覺化"
+echo "DRAEM OpticalDataset 視覺化"
 echo "模型：$MODEL_NAME"
 echo "類別：${CATEGORIES[*]}"
 echo "每類別最多：$MAX_IMAGES 張圖片"
@@ -181,8 +181,8 @@ for category in "${CATEGORIES[@]}"; do
     
     echo "處理類別：$category"
     
-    # 取得該類別的前 N 張圖片（支援 .jpg 和 .tiff）
-    images=($(ls "$category_path"/*.jpg "$category_path"/*.tiff 2>/dev/null | head -$MAX_IMAGES))
+    # 取得該類別的前 N 張圖片（支援 .tiff）
+    images=($(ls "$category_path"/*.tiff 2>/dev/null | head -$MAX_IMAGES))
     
     if [ ${#images[@]} -eq 0 ]; then
         echo "  沒有找到圖片，跳過..."
@@ -201,12 +201,12 @@ for category in "${CATEGORIES[@]}"; do
         echo -n "  處理 $img_name ... "
         
         # 執行視覺化（隱藏輸出但保留錯誤）
-        output=$(python test_DRAEM.py \
+        output=$(python test_DRAEM_optical.py \
             --model_name "$MODEL_NAME" \
             --image_path "$img_path" \
             --output_dir "$category_output" \
             --gpu_id $GPU_ID \
-            2>&1 | grep "Anomaly score" | cut -d: -f2 | xargs)
+            2>&1 | grep "異常分數" | cut -d: -f2 | xargs)
         
         if [ -n "$output" ]; then
             echo "完成 (分數: $output)"

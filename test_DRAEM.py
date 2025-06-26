@@ -12,7 +12,7 @@ from data_loader import MVTecDRAEMTestDataset
 from torch.utils.data import DataLoader
 import argparse
 
-def visualize_single_image(image_path, model, model_seg, save_dir, channels=3, device='cuda:0'):
+def visualize_single_image(image_path, model, model_seg, save_dir, channels=3, img_height=256, img_width=256, device='cuda:0'):
     """視覺化單張圖片的異常檢測結果"""
     
     # 讀取圖片
@@ -35,11 +35,11 @@ def visualize_single_image(image_path, model, model_seg, save_dir, channels=3, d
     
     # 調整大小
     if channels == 1:
-        image = cv2.resize(image[:,:,0], (256, 256))
+        image = cv2.resize(image[:,:,0], (img_width, img_height))
         image = np.expand_dims(image, axis=2)
     else:
-        image = cv2.resize(image, (256, 256))
-    image_display = cv2.resize(image_display, (256, 256))
+        image = cv2.resize(image, (img_width, img_height))
+    image_display = cv2.resize(image_display, (img_width, img_height))
     image_tensor = torch.from_numpy(image).float() / 255.0
     image_tensor = image_tensor.permute(2, 0, 1).unsqueeze(0).to(device)
     
@@ -52,8 +52,7 @@ def visualize_single_image(image_path, model, model_seg, save_dir, channels=3, d
         
     # 處理結果
     heatmap = out_mask_sm[0, 1].cpu().numpy()
-    out_mask_averaged = torch.nn.functional.avg_pool2d(out_mask_sm[:, 1:, :, :], 21, stride=1,
-                                                      padding=21 // 2).cpu().numpy()
+    out_mask_averaged = torch.nn.functional.avg_pool2d(out_mask_sm[:, 1:, :, :], 7, stride=1, padding=3).cpu().numpy()
     anomaly_score = np.max(out_mask_averaged)
     
     # 準備視覺化
@@ -68,7 +67,7 @@ def visualize_single_image(image_path, model, model_seg, save_dir, channels=3, d
     heatmap_colored = cv2.applyColorMap((heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
     
     # 創建包含三張圖片的大圖（橫向排列，上方留空間給文字）
-    h, w = 256, 256
+    h, w = img_height, img_width
     text_height = 40  # 文字區域高度
     combined_img = np.zeros((h + text_height, w*3, 3), dtype=np.uint8)
     
@@ -85,10 +84,18 @@ def visualize_single_image(image_path, model, model_seg, save_dir, channels=3, d
     combined_img[text_height:h+text_height, w*2:w*3] = heatmap_colored
     
     # 添加文字標籤（黑色文字，使用較清晰的字型）
-    cv2.putText(combined_img, "Original", (w//2-35, 28), cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 0, 0), 1)
-    cv2.putText(combined_img, "Reconstructed", (w+w//2-55, 28), cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 0, 0), 1)
-    cv2.putText(combined_img, f"Heatmap (Score: {anomaly_score:.3f})", 
-               (w*2+w//2-85, 28), cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 0, 0), 1)
+    # 使用抗鋸齒線條類型
+    font_scale = 0.7
+    thickness = 1
+    
+    # 計算文字位置（置中）
+    texts = ["Original", "Reconstructed", "Heatmap"]
+    for i, text in enumerate(texts):
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, font_scale, thickness)[0]
+        text_x = i * w + (w - text_size[0]) // 2
+        text_y = 28
+        cv2.putText(combined_img, text, (text_x, text_y), 
+                    cv2.FONT_HERSHEY_DUPLEX, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
     
     # 儲存圖片
     filename = os.path.basename(image_path)
@@ -111,6 +118,8 @@ def main():
     parser.add_argument('--gpu_id', type=int, default=0, help='GPU ID')
     parser.add_argument('--channels', type=int, default=None, choices=[1, 3],
                         help='Number of input channels. If not specified, will try to detect from model.')
+    parser.add_argument('--img_size', type=int, nargs=2, default=None,
+                        help='Image size for testing as [height, width]. If not specified, will try to detect from model.')
     
     args = parser.parse_args()
     
@@ -134,6 +143,24 @@ def main():
         channels = args.channels
         print(f"Using specified channels: {channels}")
     
+    # 檢測圖片尺寸
+    if args.img_size is None:
+        if isinstance(checkpoint, dict) and 'img_height' in checkpoint and 'img_width' in checkpoint:
+            img_height = checkpoint['img_height']
+            img_width = checkpoint['img_width']
+            print(f"Detected image size from model: {img_height}x{img_width}")
+        elif isinstance(checkpoint, dict) and 'img_size' in checkpoint:
+            # 相容舊格式（單一數值）
+            img_height = img_width = checkpoint['img_size']
+            print(f"Detected image size from model: {img_height}x{img_width} (legacy square format)")
+        else:
+            # 舊模型默認為256x256
+            img_height = img_width = 256
+            print("Using default image size: 256x256 (legacy model)")
+    else:
+        img_height, img_width = args.img_size
+        print(f"Using specified image size: {img_height}x{img_width}")
+    
     # 載入模型
     model = ReconstructiveSubNetwork(in_channels=channels, out_channels=channels)
     if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
@@ -156,7 +183,7 @@ def main():
     
     if args.image_path:
         # 處理單張圖片
-        visualize_single_image(args.image_path, model, model_seg, save_dir, channels, device)
+        visualize_single_image(args.image_path, model, model_seg, save_dir, channels, img_height, img_width, device)
     elif args.test_dir:
         # 處理目錄中的所有圖片
         image_files = []
@@ -167,7 +194,7 @@ def main():
         
         scores = []
         for img_path in image_files[:20]:  # 最多處理20張
-            score = visualize_single_image(img_path, model, model_seg, save_dir, channels, device)
+            score = visualize_single_image(img_path, model, model_seg, save_dir, channels, img_height, img_width, device)
             scores.append(score)
         
         print(f"\nProcessed {len(scores)} images")

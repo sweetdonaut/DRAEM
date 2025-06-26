@@ -26,7 +26,7 @@ def train_on_device(obj_names, args):
 
 
     for obj_name in obj_names:
-        run_name = 'DRAEM_test_'+str(args.lr)+'_'+str(args.epochs)+'_bs'+str(args.bs)+"_ch"+str(args.channels)+"_RSEM_"
+        run_name = 'DRAEM_test_'+str(args.lr)+'_'+str(args.epochs)+'_bs'+str(args.bs)+"_ch"+str(args.channels)+"_"+str(args.img_size[0])+"x"+str(args.img_size[1])+"_RSEM_"
 
 
         model = ReconstructiveSubNetwork(in_channels=args.channels, out_channels=args.channels)
@@ -48,7 +48,7 @@ def train_on_device(obj_names, args):
         loss_focal = FocalLoss()
 
         dataset = MVTecDRAEMTrainDataset(args.data_path + "/train/good/", args.anomaly_source_path, 
-                                        resize_shape=[256, 256], channels=args.channels)
+                                        resize_shape=args.img_size, channels=args.channels)
         dataloader = DataLoader(dataset, batch_size=args.bs,
                                 shuffle=True, num_workers=8)
         print("Dataset size:", len(dataset))
@@ -88,7 +88,7 @@ def train_on_device(obj_names, args):
                 epoch_losses['total'] += loss.item()
 
                 # Print training progress
-                if i_batch % 10 == 0:  # Print every 10 batches
+                if i_batch % 10 == 0 or i_batch == num_batches - 1:  # Print every 10 batches or last batch
                     current_lr = get_lr(optimizer)
                     progress = (i_batch + 1) / num_batches * 100
                     print(f'\rEpoch [{epoch+1}/{args.epochs}] - Batch [{i_batch+1}/{num_batches}] ({progress:.1f}%) - '
@@ -108,7 +108,9 @@ def train_on_device(obj_names, args):
             # 儲存模型和通道資訊
             checkpoint = {
                 'model_state_dict': model.state_dict(),
-                'channels': args.channels
+                'channels': args.channels,
+                'img_height': args.img_size[0],
+                'img_width': args.img_size[1]
             }
             torch.save(checkpoint, os.path.join(args.checkpoint_path, run_name+".pth"))
             torch.save(model_seg.state_dict(), os.path.join(args.checkpoint_path, run_name+"_seg.pth"))
@@ -128,6 +130,8 @@ def main():
     parser.add_argument('--checkpoint_path', action='store', type=str, required=True)
     parser.add_argument('--channels', action='store', type=int, default=3, choices=[1, 3],
                         help='Number of input channels (1 for grayscale, 3 for RGB). Default: 3')
+    parser.add_argument('--img_size', action='store', type=int, nargs=2, default=[256, 256],
+                        help='Image size for training as [height, width]. Default: [256, 256]')
 
     args = parser.parse_args()
 

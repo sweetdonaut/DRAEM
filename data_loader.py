@@ -6,12 +6,13 @@ import cv2
 import glob
 import albumentations as A
 from perlin import rand_perlin_2d_np
+import tifffile
 
 class MVTecDRAEMTestDataset(Dataset):
 
     def __init__(self, root_dir, resize_shape=None, channels=3):
         self.root_dir = root_dir
-        self.images = sorted(glob.glob(root_dir+"/*/*.jpg") + glob.glob(root_dir+"/*/*.png"))
+        self.images = sorted(glob.glob(root_dir+"/*/*.jpg") + glob.glob(root_dir+"/*/*.png") + glob.glob(root_dir+"/*/*.tiff"))
         self.resize_shape=resize_shape
         self.channels = channels
 
@@ -19,22 +20,36 @@ class MVTecDRAEMTestDataset(Dataset):
         return len(self.images)
 
     def transform_image(self, image_path, mask_path):
-        # 根據通道數讀取圖片
-        if self.channels == 1:
-            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-            if image is None:
-                raise ValueError(f"Failed to load image: {image_path}")
-            # 如果是單通道，增加一個維度
+        # 檢查是否為 TIFF 檔案
+        if image_path.endswith('.tiff'):
+            # 使用 tifffile 讀取 32-bit TIFF
+            image = tifffile.imread(image_path)
             if len(image.shape) == 2:
                 image = np.expand_dims(image, axis=2)
-        else:  # channels == 3
-            image = cv2.imread(image_path, cv2.IMREAD_COLOR)
-            if image is None:
-                raise ValueError(f"Failed to load image: {image_path}")
-            # 如果讀到的是灰階圖，轉換為3通道
-            if len(image.shape) == 2:
-                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-            # 如果已經是彩色圖，保持不變
+            # 處理通道轉換
+            if self.channels == 3 and image.shape[2] == 1:
+                image = np.repeat(image, 3, axis=2)
+            elif self.channels == 1 and image.shape[2] == 3:
+                # 灰階轉換保持 float32
+                image = cv2.cvtColor(image.astype(np.float32), cv2.COLOR_RGB2GRAY)
+                image = np.expand_dims(image, axis=2)
+        else:
+            # 原有的 cv2.imread 邏輯
+            if self.channels == 1:
+                image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+                if image is None:
+                    raise ValueError(f"Failed to load image: {image_path}")
+                # 如果是單通道，增加一個維度
+                if len(image.shape) == 2:
+                    image = np.expand_dims(image, axis=2)
+            else:  # channels == 3
+                image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+                if image is None:
+                    raise ValueError(f"Failed to load image: {image_path}")
+                # 如果讀到的是灰階圖，轉換為3通道
+                if len(image.shape) == 2:
+                    image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+                # 如果已經是彩色圖，保持不變
             
         if mask_path is not None and os.path.exists(mask_path):
             mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
@@ -95,10 +110,10 @@ class MVTecDRAEMTrainDataset(Dataset):
         self.anomaly_source_path = anomaly_source_path
         self.channels = channels
 
-        self.image_paths = sorted(glob.glob(root_dir+"/*.jpg"))
+        self.image_paths = sorted(glob.glob(root_dir+"/*.jpg") + glob.glob(root_dir+"/*.png") + glob.glob(root_dir+"/*.tiff"))
 
         if anomaly_source_path is not None:
-            self.anomaly_source_paths = sorted(glob.glob(anomaly_source_path+"/*/*.jpg"))
+            self.anomaly_source_paths = sorted(glob.glob(anomaly_source_path+"/*/*.jpg") + glob.glob(anomaly_source_path+"/*/*.tiff"))
             if len(self.anomaly_source_paths) == 0:
                 print(f"Warning: No anomaly source images found in {anomaly_source_path}")
                 print("Will use random noise instead.")
@@ -106,17 +121,32 @@ class MVTecDRAEMTrainDataset(Dataset):
         else:
             self.anomaly_source_paths = None
 
-        self.augmenters = [A.RandomGamma(gamma_limit=(50, 200), p=1.0),
-                      A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=1.0),
-                      A.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=1.0),
-                      A.HueSaturationValue(hue_shift_limit=50, sat_shift_limit=50, val_shift_limit=0, p=1.0),
-                      A.Solarize(p=1.0),
-                      A.Posterize(num_bits=4, p=1.0),
-                      A.InvertImg(p=1.0),
-                      A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
-                      A.Equalize(p=1.0),
-                      A.Rotate(limit=45, p=1.0)
-                      ]
+        # 根據通道數選擇適合的增強器
+        if self.channels == 1:
+            # 單通道模式：排除 HueSaturationValue
+            self.augmenters = [A.RandomGamma(gamma_limit=(50, 200), p=1.0),
+                          A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=1.0),
+                          A.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=1.0),
+                          A.Solarize(p=1.0),
+                          A.Posterize(num_bits=4, p=1.0),
+                          A.InvertImg(p=1.0),
+                          A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
+                          A.Equalize(p=1.0),
+                          A.Rotate(limit=45, p=1.0)
+                          ]
+        else:
+            # 三通道模式：包含所有增強器
+            self.augmenters = [A.RandomGamma(gamma_limit=(50, 200), p=1.0),
+                          A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=1.0),
+                          A.Sharpen(alpha=(0.2, 0.5), lightness=(0.5, 1.0), p=1.0),
+                          A.HueSaturationValue(hue_shift_limit=50, sat_shift_limit=50, val_shift_limit=0, p=1.0),
+                          A.Solarize(p=1.0),
+                          A.Posterize(num_bits=4, p=1.0),
+                          A.InvertImg(p=1.0),
+                          A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
+                          A.Equalize(p=1.0),
+                          A.Rotate(limit=45, p=1.0)
+                          ]
 
         self.rot = A.Rotate(limit=90, p=1.0)
 
@@ -139,15 +169,26 @@ class MVTecDRAEMTrainDataset(Dataset):
         
         if anomaly_source_path is not None:
             # Use external anomaly source (e.g., DTD dataset)
-            if self.channels == 1:
-                anomaly_source_img = cv2.imread(anomaly_source_path, cv2.IMREAD_GRAYSCALE)
+            if anomaly_source_path.endswith('.tiff'):
+                # 使用 tifffile 讀取 TIFF
+                anomaly_source_img = tifffile.imread(anomaly_source_path)
                 if len(anomaly_source_img.shape) == 2:
                     anomaly_source_img = np.expand_dims(anomaly_source_img, axis=2)
+                if self.channels == 3 and anomaly_source_img.shape[2] == 1:
+                    anomaly_source_img = np.repeat(anomaly_source_img, 3, axis=2)
+                elif self.channels == 1 and anomaly_source_img.shape[2] == 3:
+                    anomaly_source_img = cv2.cvtColor(anomaly_source_img.astype(np.float32), cv2.COLOR_RGB2GRAY)
+                    anomaly_source_img = np.expand_dims(anomaly_source_img, axis=2)
             else:
-                anomaly_source_img = cv2.imread(anomaly_source_path)
-                # 如果是灰階圖，轉為RGB
-                if len(anomaly_source_img.shape) == 2:
-                    anomaly_source_img = cv2.cvtColor(anomaly_source_img, cv2.COLOR_GRAY2RGB)
+                if self.channels == 1:
+                    anomaly_source_img = cv2.imread(anomaly_source_path, cv2.IMREAD_GRAYSCALE)
+                    if len(anomaly_source_img.shape) == 2:
+                        anomaly_source_img = np.expand_dims(anomaly_source_img, axis=2)
+                else:
+                    anomaly_source_img = cv2.imread(anomaly_source_path)
+                    # 如果是灰階圖，轉為RGB
+                    if len(anomaly_source_img.shape) == 2:
+                        anomaly_source_img = cv2.cvtColor(anomaly_source_img, cv2.COLOR_GRAY2RGB)
             anomaly_source_img = cv2.resize(anomaly_source_img, dsize=(self.resize_shape[1], self.resize_shape[0]))
             anomaly_img_augmented = aug(image=anomaly_source_img)['image']
         else:
@@ -186,16 +227,30 @@ class MVTecDRAEMTrainDataset(Dataset):
             return augmented_image, msk, np.array([has_anomaly],dtype=np.float32)
 
     def transform_image(self, image_path, anomaly_source_path):
-        # 根據通道數讀取圖片
-        if self.channels == 1:
-            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        # 檢查是否為 TIFF 檔案
+        if image_path.endswith('.tiff'):
+            # 使用 tifffile 讀取 32-bit TIFF
+            image = tifffile.imread(image_path)
             if len(image.shape) == 2:
                 image = np.expand_dims(image, axis=2)
+            # 處理通道轉換
+            if self.channels == 3 and image.shape[2] == 1:
+                image = np.repeat(image, 3, axis=2)
+            elif self.channels == 1 and image.shape[2] == 3:
+                # 灰階轉換保持 float32
+                image = cv2.cvtColor(image.astype(np.float32), cv2.COLOR_RGB2GRAY)
+                image = np.expand_dims(image, axis=2)
         else:
-            image = cv2.imread(image_path)
-            # 如果讀到的是灰階圖，轉換為3通道
-            if len(image.shape) == 2:
-                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            # 原有的 cv2.imread 邏輯
+            if self.channels == 1:
+                image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+                if len(image.shape) == 2:
+                    image = np.expand_dims(image, axis=2)
+            else:
+                image = cv2.imread(image_path)
+                # 如果讀到的是灰階圖，轉換為3通道
+                if len(image.shape) == 2:
+                    image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
                 
         image = cv2.resize(image, dsize=(self.resize_shape[1], self.resize_shape[0]))
 
