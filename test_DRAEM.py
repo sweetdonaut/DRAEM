@@ -1,175 +1,182 @@
+"""
+用於單獨視覺化測試結果的腳本
+可以在訓練完成後單獨運行來生成視覺化結果
+"""
+
 import torch
-import torch.nn.functional as F
+import numpy as np
+import cv2
+import os
+from model_unet import ReconstructiveSubNetwork, DiscriminativeSubNetwork
 from data_loader import MVTecDRAEMTestDataset
 from torch.utils.data import DataLoader
-import numpy as np
-from sklearn.metrics import roc_auc_score, average_precision_score
-from model_unet import ReconstructiveSubNetwork, DiscriminativeSubNetwork
-import os
+import argparse
 
-def write_results_to_file(run_name, image_auc, pixel_auc, image_ap, pixel_ap):
-    if not os.path.exists('./outputs/'):
-        os.makedirs('./outputs/')
+def visualize_single_image(image_path, model, model_seg, save_dir, channels=3, device='cuda:0'):
+    """視覺化單張圖片的異常檢測結果"""
+    
+    # 讀取圖片
+    if channels == 1:
+        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        if len(image.shape) == 2:
+            image = np.expand_dims(image, axis=2)
+        # 為了視覺化，將灰階圖轉為3通道
+        image_display = cv2.cvtColor(image[:,:,0], cv2.COLOR_GRAY2RGB)
+    else:
+        image = cv2.imread(image_path)
+        # 如果是灰階圖，自動轉為RGB
+        if len(image.shape) == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        else:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_display = image
+    
+    original_size = image.shape[:2]
+    
+    # 調整大小
+    if channels == 1:
+        image = cv2.resize(image[:,:,0], (256, 256))
+        image = np.expand_dims(image, axis=2)
+    else:
+        image = cv2.resize(image, (256, 256))
+    image_display = cv2.resize(image_display, (256, 256))
+    image_tensor = torch.from_numpy(image).float() / 255.0
+    image_tensor = image_tensor.permute(2, 0, 1).unsqueeze(0).to(device)
+    
+    # 推理
+    with torch.no_grad():
+        gray_rec = model(image_tensor)
+        joined_in = torch.cat((gray_rec, image_tensor), dim=1)
+        out_mask = model_seg(joined_in)
+        out_mask_sm = torch.softmax(out_mask, dim=1)
+        
+    # 處理結果
+    heatmap = out_mask_sm[0, 1].cpu().numpy()
+    out_mask_averaged = torch.nn.functional.avg_pool2d(out_mask_sm[:, 1:, :, :], 21, stride=1,
+                                                      padding=21 // 2).cpu().numpy()
+    anomaly_score = np.max(out_mask_averaged)
+    
+    # 準備視覺化
+    original_img = image_display
+    reconstructed_img = (gray_rec[0].cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8)
+    
+    # 如果是單通道，轉換重建圖為3通道以便顯示
+    if channels == 1:
+        reconstructed_img = cv2.cvtColor(reconstructed_img[:,:,0], cv2.COLOR_GRAY2RGB)
+    
+    # 創建熱力圖
+    heatmap_colored = cv2.applyColorMap((heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    
+    # 創建包含三張圖片的大圖（橫向排列，上方留空間給文字）
+    h, w = 256, 256
+    text_height = 40  # 文字區域高度
+    combined_img = np.zeros((h + text_height, w*3, 3), dtype=np.uint8)
+    
+    # 填充背景色（白色）
+    combined_img[:text_height, :] = 255
+    
+    # 左：原圖
+    combined_img[text_height:h+text_height, 0:w] = original_img
+    
+    # 中：重建圖
+    combined_img[text_height:h+text_height, w:w*2] = reconstructed_img
+    
+    # 右：純熱力圖
+    combined_img[text_height:h+text_height, w*2:w*3] = heatmap_colored
+    
+    # 添加文字標籤（黑色文字，使用較清晰的字型）
+    cv2.putText(combined_img, "Original", (w//2-35, 28), cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 0, 0), 1)
+    cv2.putText(combined_img, "Reconstructed", (w+w//2-55, 28), cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 0, 0), 1)
+    cv2.putText(combined_img, f"Heatmap (Score: {anomaly_score:.3f})", 
+               (w*2+w//2-85, 28), cv2.FONT_HERSHEY_DUPLEX, 0.6, (0, 0, 0), 1)
+    
+    # 儲存圖片
+    filename = os.path.basename(image_path)
+    # 直接使用提供的 save_dir，不創建新的子目錄
+    save_path = os.path.join(save_dir, f'vis_{filename}')
+    cv2.imwrite(save_path, cv2.cvtColor(combined_img, cv2.COLOR_RGB2BGR))
+    
+    print(f"Saved visualization to: {save_path}")
+    print(f"Anomaly score: {anomaly_score:.3f}")
+    
+    return anomaly_score
 
-    fin_str = "img_auc,"+run_name
-    for i in image_auc:
-        fin_str += "," + str(np.round(i, 3))
-    fin_str += ","+str(np.round(np.mean(image_auc), 3))
-    fin_str += "\n"
-    fin_str += "pixel_auc,"+run_name
-    for i in pixel_auc:
-        fin_str += "," + str(np.round(i, 3))
-    fin_str += ","+str(np.round(np.mean(pixel_auc), 3))
-    fin_str += "\n"
-    fin_str += "img_ap,"+run_name
-    for i in image_ap:
-        fin_str += "," + str(np.round(i, 3))
-    fin_str += ","+str(np.round(np.mean(image_ap), 3))
-    fin_str += "\n"
-    fin_str += "pixel_ap,"+run_name
-    for i in pixel_ap:
-        fin_str += "," + str(np.round(i, 3))
-    fin_str += ","+str(np.round(np.mean(pixel_ap), 3))
-    fin_str += "\n"
-    fin_str += "--------------------------\n"
-
-    with open("./outputs/results.txt",'a+') as file:
-        file.write(fin_str)
-
-
-def test(obj_names, mvtec_path, checkpoint_path, base_model_name):
-    obj_ap_pixel_list = []
-    obj_auroc_pixel_list = []
-    obj_ap_image_list = []
-    obj_auroc_image_list = []
-    for obj_name in obj_names:
-        img_dim = 256
-        run_name = base_model_name+"_"+obj_name+'_'
-
-        model = ReconstructiveSubNetwork(in_channels=3, out_channels=3)
-        model.load_state_dict(torch.load(os.path.join(checkpoint_path,run_name+".pckl"), map_location='cuda:0'))
-        model.cuda()
-        model.eval()
-
-        model_seg = DiscriminativeSubNetwork(in_channels=6, out_channels=2)
-        model_seg.load_state_dict(torch.load(os.path.join(checkpoint_path, run_name+"_seg.pckl"), map_location='cuda:0'))
-        model_seg.cuda()
-        model_seg.eval()
-
-        dataset = MVTecDRAEMTestDataset(mvtec_path + obj_name + "/test/", resize_shape=[img_dim, img_dim])
-        dataloader = DataLoader(dataset, batch_size=1,
-                                shuffle=False, num_workers=0)
-
-        total_pixel_scores = np.zeros((img_dim * img_dim * len(dataset)))
-        total_gt_pixel_scores = np.zeros((img_dim * img_dim * len(dataset)))
-        mask_cnt = 0
-
-        anomaly_score_gt = []
-        anomaly_score_prediction = []
-
-        display_images = torch.zeros((16 ,3 ,256 ,256)).cuda()
-        display_gt_images = torch.zeros((16 ,3 ,256 ,256)).cuda()
-        display_out_masks = torch.zeros((16 ,1 ,256 ,256)).cuda()
-        display_in_masks = torch.zeros((16 ,1 ,256 ,256)).cuda()
-        cnt_display = 0
-        display_indices = np.random.randint(len(dataloader), size=(16,))
-
-
-        for i_batch, sample_batched in enumerate(dataloader):
-
-            gray_batch = sample_batched["image"].cuda()
-
-            is_normal = sample_batched["has_anomaly"].detach().numpy()[0 ,0]
-            anomaly_score_gt.append(is_normal)
-            true_mask = sample_batched["mask"]
-            true_mask_cv = true_mask.detach().numpy()[0, :, :, :].transpose((1, 2, 0))
-
-            gray_rec = model(gray_batch)
-            joined_in = torch.cat((gray_rec.detach(), gray_batch), dim=1)
-
-            out_mask = model_seg(joined_in)
-            out_mask_sm = torch.softmax(out_mask, dim=1)
-
-
-            if i_batch in display_indices:
-                t_mask = out_mask_sm[:, 1:, :, :]
-                display_images[cnt_display] = gray_rec[0]
-                display_gt_images[cnt_display] = gray_batch[0]
-                display_out_masks[cnt_display] = t_mask[0]
-                display_in_masks[cnt_display] = true_mask[0]
-                cnt_display += 1
-
-
-            out_mask_cv = out_mask_sm[0 ,1 ,: ,:].detach().cpu().numpy()
-
-            out_mask_averaged = torch.nn.functional.avg_pool2d(out_mask_sm[: ,1: ,: ,:], 21, stride=1,
-                                                               padding=21 // 2).cpu().detach().numpy()
-            image_score = np.max(out_mask_averaged)
-
-            anomaly_score_prediction.append(image_score)
-
-            flat_true_mask = true_mask_cv.flatten()
-            flat_out_mask = out_mask_cv.flatten()
-            total_pixel_scores[mask_cnt * img_dim * img_dim:(mask_cnt + 1) * img_dim * img_dim] = flat_out_mask
-            total_gt_pixel_scores[mask_cnt * img_dim * img_dim:(mask_cnt + 1) * img_dim * img_dim] = flat_true_mask
-            mask_cnt += 1
-
-        anomaly_score_prediction = np.array(anomaly_score_prediction)
-        anomaly_score_gt = np.array(anomaly_score_gt)
-        auroc = roc_auc_score(anomaly_score_gt, anomaly_score_prediction)
-        ap = average_precision_score(anomaly_score_gt, anomaly_score_prediction)
-
-        total_gt_pixel_scores = total_gt_pixel_scores.astype(np.uint8)
-        total_gt_pixel_scores = total_gt_pixel_scores[:img_dim * img_dim * mask_cnt]
-        total_pixel_scores = total_pixel_scores[:img_dim * img_dim * mask_cnt]
-        auroc_pixel = roc_auc_score(total_gt_pixel_scores, total_pixel_scores)
-        ap_pixel = average_precision_score(total_gt_pixel_scores, total_pixel_scores)
-        obj_ap_pixel_list.append(ap_pixel)
-        obj_auroc_pixel_list.append(auroc_pixel)
-        obj_auroc_image_list.append(auroc)
-        obj_ap_image_list.append(ap)
-        print(obj_name)
-        print("AUC Image:  " +str(auroc))
-        print("AP Image:  " +str(ap))
-        print("AUC Pixel:  " +str(auroc_pixel))
-        print("AP Pixel:  " +str(ap_pixel))
-        print("==============================")
-
-    print(run_name)
-    print("AUC Image mean:  " + str(np.mean(obj_auroc_image_list)))
-    print("AP Image mean:  " + str(np.mean(obj_ap_image_list)))
-    print("AUC Pixel mean:  " + str(np.mean(obj_auroc_pixel_list)))
-    print("AP Pixel mean:  " + str(np.mean(obj_ap_pixel_list)))
-
-    write_results_to_file(run_name, obj_auroc_image_list, obj_auroc_pixel_list, obj_ap_image_list, obj_ap_pixel_list)
-
-if __name__=="__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--gpu_id', action='store', type=int, required=True)
-    parser.add_argument('--base_model_name', action='store', type=str, required=True)
-    parser.add_argument('--data_path', action='store', type=str, required=True)
-    parser.add_argument('--checkpoint_path', action='store', type=str, required=True)
-
+def main():
+    parser = argparse.ArgumentParser(description='Visualize DRAEM results')
+    parser.add_argument('--checkpoint_path', type=str, default='./checkpoints/', help='Path to checkpoint directory')
+    parser.add_argument('--model_name', type=str, required=True, help='Model name (without extension)')
+    parser.add_argument('--image_path', type=str, help='Path to single image to visualize')
+    parser.add_argument('--test_dir', type=str, help='Path to test directory with multiple images')
+    parser.add_argument('--output_dir', type=str, default='./outputs/visualizations/', help='Output directory')
+    parser.add_argument('--gpu_id', type=int, default=0, help='GPU ID')
+    parser.add_argument('--channels', type=int, default=None, choices=[1, 3],
+                        help='Number of input channels. If not specified, will try to detect from model.')
+    
     args = parser.parse_args()
+    
+    # 設定設備
+    device = f'cuda:{args.gpu_id}' if torch.cuda.is_available() else 'cpu'
+    
+    # 載入模型並檢查通道數
+    checkpoint_path = os.path.join(args.checkpoint_path, args.model_name + ".pth")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # 檢測通道數
+    if args.channels is None:
+        if isinstance(checkpoint, dict) and 'channels' in checkpoint:
+            channels = checkpoint['channels']
+            print(f"Detected channels from model: {channels}")
+        else:
+            # 舊模型默認為3通道
+            channels = 3
+            print("Using default channels: 3 (legacy model)")
+    else:
+        channels = args.channels
+        print(f"Using specified channels: {channels}")
+    
+    # 載入模型
+    model = ReconstructiveSubNetwork(in_channels=channels, out_channels=channels)
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        # 兼容舊格式
+        model.load_state_dict(checkpoint)
+    model.to(device)
+    model.eval()
+    
+    model_seg = DiscriminativeSubNetwork(in_channels=channels*2, out_channels=2)
+    model_seg.load_state_dict(torch.load(os.path.join(args.checkpoint_path, args.model_name + "_seg.pth"), 
+                                        map_location=device))
+    model_seg.to(device)
+    model_seg.eval()
+    
+    # 使用指定的輸出目錄，不創建新的時間戳子目錄
+    save_dir = args.output_dir
+    os.makedirs(save_dir, exist_ok=True)
+    
+    if args.image_path:
+        # 處理單張圖片
+        visualize_single_image(args.image_path, model, model_seg, save_dir, channels, device)
+    elif args.test_dir:
+        # 處理目錄中的所有圖片
+        image_files = []
+        for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+            image_files.extend(glob.glob(os.path.join(args.test_dir, '**', ext), recursive=True))
+        
+        print(f"Found {len(image_files)} images")
+        
+        scores = []
+        for img_path in image_files[:20]:  # 最多處理20張
+            score = visualize_single_image(img_path, model, model_seg, save_dir, channels, device)
+            scores.append(score)
+        
+        print(f"\nProcessed {len(scores)} images")
+        print(f"Average anomaly score: {np.mean(scores):.3f}")
+        print(f"Max anomaly score: {np.max(scores):.3f}")
+        print(f"Min anomaly score: {np.min(scores):.3f}")
+    else:
+        print("Please provide either --image_path or --test_dir")
 
-    obj_list = ['capsule',
-                 'bottle',
-                 'carpet',
-                 'leather',
-                 'pill',
-                 'transistor',
-                 'tile',
-                 'cable',
-                 'zipper',
-                 'toothbrush',
-                 'metal_nut',
-                 'hazelnut',
-                 'screw',
-                 'grid',
-                 'wood'
-                 ]
-
-    with torch.cuda.device(args.gpu_id):
-        test(obj_list,args.data_path, args.checkpoint_path, args.base_model_name)
+if __name__ == "__main__":
+    import glob
+    main()

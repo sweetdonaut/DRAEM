@@ -9,20 +9,38 @@ from perlin import rand_perlin_2d_np
 
 class MVTecDRAEMTestDataset(Dataset):
 
-    def __init__(self, root_dir, resize_shape=None):
+    def __init__(self, root_dir, resize_shape=None, channels=3):
         self.root_dir = root_dir
-        self.images = sorted(glob.glob(root_dir+"/*/*.png"))
+        self.images = sorted(glob.glob(root_dir+"/*/*.jpg") + glob.glob(root_dir+"/*/*.png"))
         self.resize_shape=resize_shape
+        self.channels = channels
 
     def __len__(self):
         return len(self.images)
 
     def transform_image(self, image_path, mask_path):
-        image = cv2.imread(image_path, cv2.IMREAD_COLOR)
-        if mask_path is not None:
+        # 根據通道數讀取圖片
+        if self.channels == 1:
+            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+            if image is None:
+                raise ValueError(f"Failed to load image: {image_path}")
+            # 如果是單通道，增加一個維度
+            if len(image.shape) == 2:
+                image = np.expand_dims(image, axis=2)
+        else:  # channels == 3
+            image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+            if image is None:
+                raise ValueError(f"Failed to load image: {image_path}")
+            # 如果讀到的是灰階圖，轉換為3通道
+            if len(image.shape) == 2:
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            # 如果已經是彩色圖，保持不變
+            
+        if mask_path is not None and os.path.exists(mask_path):
             mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
         else:
             mask = np.zeros((image.shape[0],image.shape[1]))
+            
         if self.resize_shape != None:
             image = cv2.resize(image, dsize=(self.resize_shape[1], self.resize_shape[0]))
             mask = cv2.resize(mask, dsize=(self.resize_shape[1], self.resize_shape[0]))
@@ -30,7 +48,7 @@ class MVTecDRAEMTestDataset(Dataset):
         image = image / 255.0
         mask = mask / 255.0
 
-        image = np.array(image).reshape((image.shape[0], image.shape[1], 3)).astype(np.float32)
+        image = np.array(image).reshape((image.shape[0], image.shape[1], self.channels)).astype(np.float32)
         mask = np.array(mask).reshape((mask.shape[0], mask.shape[1], 1)).astype(np.float32)
 
         image = np.transpose(image, (2, 0, 1))
@@ -63,17 +81,19 @@ class MVTecDRAEMTestDataset(Dataset):
 
 class MVTecDRAEMTrainDataset(Dataset):
 
-    def __init__(self, root_dir, anomaly_source_path=None, resize_shape=None):
+    def __init__(self, root_dir, anomaly_source_path=None, resize_shape=None, channels=3):
         """
         Args:
             root_dir (string): Directory with all the images.
             anomaly_source_path (string, optional): Path to anomaly source images (e.g., DTD dataset).
                                                    If None, uses random noise.
             resize_shape (list, optional): [height, width] to resize images.
+            channels (int): Number of channels (1 or 3).
         """
         self.root_dir = root_dir
         self.resize_shape=resize_shape
         self.anomaly_source_path = anomaly_source_path
+        self.channels = channels
 
         self.image_paths = sorted(glob.glob(root_dir+"/*.jpg"))
 
@@ -119,13 +139,21 @@ class MVTecDRAEMTrainDataset(Dataset):
         
         if anomaly_source_path is not None:
             # Use external anomaly source (e.g., DTD dataset)
-            anomaly_source_img = cv2.imread(anomaly_source_path)
+            if self.channels == 1:
+                anomaly_source_img = cv2.imread(anomaly_source_path, cv2.IMREAD_GRAYSCALE)
+                if len(anomaly_source_img.shape) == 2:
+                    anomaly_source_img = np.expand_dims(anomaly_source_img, axis=2)
+            else:
+                anomaly_source_img = cv2.imread(anomaly_source_path)
+                # 如果是灰階圖，轉為RGB
+                if len(anomaly_source_img.shape) == 2:
+                    anomaly_source_img = cv2.cvtColor(anomaly_source_img, cv2.COLOR_GRAY2RGB)
             anomaly_source_img = cv2.resize(anomaly_source_img, dsize=(self.resize_shape[1], self.resize_shape[0]))
             anomaly_img_augmented = aug(image=anomaly_source_img)['image']
         else:
             # Use random noise when no anomaly source is provided
-            # Generate random colored noise
-            noise = np.random.rand(self.resize_shape[0], self.resize_shape[1], 3) * 255
+            # Generate random noise based on channel count
+            noise = np.random.rand(self.resize_shape[0], self.resize_shape[1], self.channels) * 255
             noise = noise.astype(np.uint8)
             anomaly_img_augmented = aug(image=noise)['image']
         perlin_scalex = 2 ** (torch.randint(min_perlin_scale, perlin_scale, (1,)).numpy()[0])
@@ -158,14 +186,24 @@ class MVTecDRAEMTrainDataset(Dataset):
             return augmented_image, msk, np.array([has_anomaly],dtype=np.float32)
 
     def transform_image(self, image_path, anomaly_source_path):
-        image = cv2.imread(image_path)
+        # 根據通道數讀取圖片
+        if self.channels == 1:
+            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+            if len(image.shape) == 2:
+                image = np.expand_dims(image, axis=2)
+        else:
+            image = cv2.imread(image_path)
+            # 如果讀到的是灰階圖，轉換為3通道
+            if len(image.shape) == 2:
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+                
         image = cv2.resize(image, dsize=(self.resize_shape[1], self.resize_shape[0]))
 
         do_aug_orig = torch.rand(1).numpy()[0] > 0.7
         if do_aug_orig:
             image = self.rot(image=image)['image']
 
-        image = np.array(image).reshape((image.shape[0], image.shape[1], image.shape[2])).astype(np.float32) / 255.0
+        image = np.array(image).reshape((image.shape[0], image.shape[1], self.channels)).astype(np.float32) / 255.0
         augmented_image, anomaly_mask, has_anomaly = self.augment_image(image, anomaly_source_path)
         augmented_image = np.transpose(augmented_image, (2, 0, 1))
         image = np.transpose(image, (2, 0, 1))
