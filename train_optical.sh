@@ -8,7 +8,7 @@ echo "=========================================="
 echo ""
 
 # 預設值
-CHANNELS=1
+CHANNELS=3
 IMG_HEIGHT=960
 IMG_WIDTH=192
 BATCH_SIZE=3

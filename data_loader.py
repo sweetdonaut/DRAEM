@@ -96,7 +96,7 @@ class MVTecDRAEMTestDataset(Dataset):
 
 class MVTecDRAEMTrainDataset(Dataset):
 
-    def __init__(self, root_dir, anomaly_source_path=None, resize_shape=None, channels=3):
+    def __init__(self, root_dir, anomaly_source_path=None, resize_shape=None, channels=3, max_rotation=45):
         """
         Args:
             root_dir (string): Directory with all the images.
@@ -104,6 +104,7 @@ class MVTecDRAEMTrainDataset(Dataset):
                                                    If None, uses random noise.
             resize_shape (list, optional): [height, width] to resize images.
             channels (int): Number of channels (1 or 3).
+            max_rotation (int): Maximum rotation angle in degrees. Default: 45.
         """
         self.root_dir = root_dir
         self.resize_shape=resize_shape
@@ -132,7 +133,7 @@ class MVTecDRAEMTrainDataset(Dataset):
                           A.InvertImg(p=1.0),
                           A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
                           A.Equalize(p=1.0),
-                          A.Rotate(limit=45, p=1.0)
+                          A.Rotate(limit=max_rotation, p=1.0)
                           ]
         else:
             # 三通道模式：包含所有增強器
@@ -145,10 +146,10 @@ class MVTecDRAEMTrainDataset(Dataset):
                           A.InvertImg(p=1.0),
                           A.CLAHE(clip_limit=4.0, tile_grid_size=(8, 8), p=1.0),
                           A.Equalize(p=1.0),
-                          A.Rotate(limit=45, p=1.0)
+                          A.Rotate(limit=max_rotation, p=1.0)
                           ]
 
-        self.rot = A.Rotate(limit=90, p=1.0)
+        self.rot = A.Rotate(limit=min(90, max_rotation*2), p=1.0)
 
 
     def __len__(self):
@@ -216,7 +217,7 @@ class MVTecDRAEMTrainDataset(Dataset):
         no_anomaly = torch.rand(1).numpy()[0]
         if no_anomaly > 0.5:
             image = image.astype(np.float32)
-            return image, np.zeros_like(perlin_thr, dtype=np.float32), np.array([0.0],dtype=np.float32)
+            return image, np.zeros_like(perlin_thr, dtype=np.float32), np.array([0.0],dtype=np.float32), np.zeros_like(img_thr, dtype=np.float32)
         else:
             augmented_image = augmented_image.astype(np.float32)
             msk = (perlin_thr).astype(np.float32)
@@ -224,7 +225,7 @@ class MVTecDRAEMTrainDataset(Dataset):
             has_anomaly = 1.0
             if np.sum(msk) == 0:
                 has_anomaly=0.0
-            return augmented_image, msk, np.array([has_anomaly],dtype=np.float32)
+            return augmented_image, msk, np.array([has_anomaly],dtype=np.float32), img_thr
 
     def transform_image(self, image_path, anomaly_source_path):
         # 檢查是否為 TIFF 檔案
@@ -259,11 +260,12 @@ class MVTecDRAEMTrainDataset(Dataset):
             image = self.rot(image=image)['image']
 
         image = np.array(image).reshape((image.shape[0], image.shape[1], self.channels)).astype(np.float32) / 255.0
-        augmented_image, anomaly_mask, has_anomaly = self.augment_image(image, anomaly_source_path)
+        augmented_image, anomaly_mask, has_anomaly, anomaly_texture = self.augment_image(image, anomaly_source_path)
         augmented_image = np.transpose(augmented_image, (2, 0, 1))
         image = np.transpose(image, (2, 0, 1))
         anomaly_mask = np.transpose(anomaly_mask, (2, 0, 1))
-        return image, augmented_image, anomaly_mask, has_anomaly
+        anomaly_texture = np.transpose(anomaly_texture, (2, 0, 1))
+        return image, augmented_image, anomaly_mask, has_anomaly, anomaly_texture
 
     def __getitem__(self, idx):
         idx = torch.randint(0, len(self.image_paths), (1,)).item()
@@ -274,9 +276,10 @@ class MVTecDRAEMTrainDataset(Dataset):
         else:
             anomaly_source_path = None
             
-        image, augmented_image, anomaly_mask, has_anomaly = self.transform_image(
+        image, augmented_image, anomaly_mask, has_anomaly, anomaly_texture = self.transform_image(
             self.image_paths[idx], anomaly_source_path)
         sample = {'image': image, "anomaly_mask": anomaly_mask,
-                  'augmented_image': augmented_image, 'has_anomaly': has_anomaly, 'idx': idx}
+                  'augmented_image': augmented_image, 'has_anomaly': has_anomaly, 
+                  'anomaly_texture': anomaly_texture, 'idx': idx}
 
         return sample

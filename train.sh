@@ -2,7 +2,7 @@
 # 簡單的 DRAEM 訓練腳本
 
 # 預設值
-CHANNELS=1
+CHANNELS=3
 IMG_HEIGHT=256
 IMG_WIDTH=256
 
@@ -31,7 +31,7 @@ done
 echo "開始訓練..."
 echo "通道數：$CHANNELS"
 echo "圖片尺寸：${IMG_HEIGHT}x${IMG_WIDTH}"
-python train_DRAEM.py --gpu_id 0 --lr 0.0001 --bs 8 --epochs 2 --data_path ./RSEM_dataset --checkpoint_path ./checkpoints/ --channels $CHANNELS --img_size $IMG_HEIGHT $IMG_WIDTH
+python train_DRAEM.py --gpu_id 0 --lr 0.0001 --bs 8 --epochs 1 --data_path ./RSEM_dataset --checkpoint_path ./checkpoints/ --channels $CHANNELS --img_size $IMG_HEIGHT $IMG_WIDTH
 
 # 檢查訓練是否成功
 if [ $? -eq 0 ]; then

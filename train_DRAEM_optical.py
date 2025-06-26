@@ -12,10 +12,84 @@ from model_unet import ReconstructiveSubNetwork, DiscriminativeSubNetwork
 from loss import FocalLoss, SSIM
 import os
 import time
+import cv2
+import numpy as np
 
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
+
+def visualize_training_samples(dataloader, run_name, checkpoint_path, num_samples=5):
+    """
+    視覺化訓練資料，展示原圖、彩色異常紋理×遮罩、合成異常圖
+    """
+    # 創建儲存資料夾
+    vis_dir = os.path.join(checkpoint_path, f"{run_name}_training_samples")
+    os.makedirs(vis_dir, exist_ok=True)
+    
+    # 獲取一個 batch 的資料
+    sample_batch = next(iter(dataloader))
+    
+    # 提取需要的資料
+    original_images = sample_batch["image"]  # (B, C, H, W)
+    augmented_images = sample_batch["augmented_image"]
+    anomaly_textures = sample_batch["anomaly_texture"]  # 彩色異常紋理×遮罩
+    
+    # 處理前 num_samples 個樣本
+    actual_samples = min(num_samples, original_images.shape[0])
+    print(f"Processing {actual_samples} samples...")
+    
+    for i in range(actual_samples):
+        # 轉換為 numpy 並調整維度順序 (C, H, W) -> (H, W, C)
+        orig_img = original_images[i].numpy().transpose(1, 2, 0)
+        aug_img = augmented_images[i].numpy().transpose(1, 2, 0)
+        anomaly_tex = anomaly_textures[i].numpy().transpose(1, 2, 0)
+        
+        # 轉換到 0-255 範圍
+        orig_img = (orig_img * 255).astype(np.uint8)
+        aug_img = (aug_img * 255).astype(np.uint8)
+        anomaly_tex = (anomaly_tex * 255).astype(np.uint8)
+        
+        # 如果是單通道，轉換為三通道以便顯示
+        if orig_img.shape[2] == 1:
+            orig_img = cv2.cvtColor(orig_img, cv2.COLOR_GRAY2BGR)
+            aug_img = cv2.cvtColor(aug_img, cv2.COLOR_GRAY2BGR)
+            anomaly_tex = cv2.cvtColor(anomaly_tex, cv2.COLOR_GRAY2BGR)
+        else:
+            # OpenCV 使用 BGR，需要轉換
+            orig_img = cv2.cvtColor(orig_img, cv2.COLOR_RGB2BGR)
+            aug_img = cv2.cvtColor(aug_img, cv2.COLOR_RGB2BGR)
+            anomaly_tex = cv2.cvtColor(anomaly_tex, cv2.COLOR_RGB2BGR)
+        
+        # 橫向拼接三張圖
+        combined = np.hstack([orig_img, anomaly_tex, aug_img])
+        
+        # 加上標題
+        h, w = orig_img.shape[:2]
+        title_height = 40
+        titled_img = np.ones((title_height + h, w * 3, 3), dtype=np.uint8) * 255
+        
+        # 加入標題文字（使用與 test_DRAEM_optical.py 相同的字體設定）
+        font_scale = 0.6
+        thickness = 1
+        font = cv2.FONT_HERSHEY_DUPLEX
+        
+        texts = ["Original", "Anomaly Texture x Mask", "Augmented"]
+        for j, text in enumerate(texts):
+            text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+            text_x = j * w + (w - text_size[0]) // 2
+            text_y = 25
+            cv2.putText(titled_img, text, (text_x, text_y), 
+                        font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+        
+        # 將圖片放入
+        titled_img[title_height:, :, :] = combined
+        
+        # 儲存圖片
+        save_path = os.path.join(vis_dir, f"sample_{i}.jpg")
+        cv2.imwrite(save_path, titled_img)
+    
+    print(f"Training samples visualization saved to: {vis_dir}")
 
 def weights_init(m):
     classname = m.__class__.__name__
@@ -64,11 +138,13 @@ def train_on_device(obj_names, args):
         loss_focal = FocalLoss()
 
         # 資料載入器 - 針對 OpticalDataset 優化
+        # 對於長條形圖片，限制旋轉角度為 5 度
         dataset = MVTecDRAEMTrainDataset(
             args.data_path + "/train/good/", 
             args.anomaly_source_path, 
             resize_shape=args.img_size, 
-            channels=args.channels
+            channels=args.channels,
+            max_rotation=5  # 限制旋轉角度為 5 度
         )
         
         # 使用較少的 workers 以避免記憶體問題
@@ -83,6 +159,10 @@ def train_on_device(obj_names, args):
         
         print(f"資料集大小: {len(dataset)}")
         print(f"Batch 數量: {len(dataloader)}")
+        
+        # 在訓練開始前視覺化訓練樣本
+        print("Generating training samples visualization...")
+        visualize_training_samples(dataloader, run_name, args.checkpoint_path, num_samples=5)
 
         n_iter = 0
         num_batches = len(dataloader)
