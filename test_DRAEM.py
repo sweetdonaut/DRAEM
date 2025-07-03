@@ -11,8 +11,9 @@ from model_unet import ReconstructiveSubNetwork, DiscriminativeSubNetwork
 from data_loader import MVTecDRAEMTestDataset
 from torch.utils.data import DataLoader
 import argparse
+from diff_fusion import FUSION_METHODS
 
-def visualize_single_image(image_path, model, model_seg, save_dir, channels=3, img_height=256, img_width=256, device='cuda:0'):
+def visualize_single_image(image_path, model, model_seg, save_dir, channels=3, img_height=256, img_width=256, device='cuda:0', fusion_method='none', save_debug=False):
     """視覺化單張圖片的異常檢測結果"""
     
     # 讀取圖片
@@ -52,7 +53,32 @@ def visualize_single_image(image_path, model, model_seg, save_dir, channels=3, i
         
     # 處理結果
     heatmap = out_mask_sm[0, 1].cpu().numpy()
-    out_mask_averaged = torch.nn.functional.avg_pool2d(out_mask_sm[:, 1:, :, :], 7, stride=1, padding=3).cpu().numpy()
+    
+    # 應用差異融合（如果啟用）
+    if fusion_method != 'none' and fusion_method in FUSION_METHODS:
+        fusion_func = FUSION_METHODS[fusion_method]
+        # 準備輸入數據
+        reconstruction_np = gray_rec[0].cpu().numpy().transpose(1, 2, 0)
+        original_np = image_tensor[0].cpu().numpy().transpose(1, 2, 0)
+        
+        # 執行融合
+        heatmap, debug_info = fusion_func(heatmap, reconstruction_np, original_np)
+        
+        # 如果需要保存除錯資訊
+        if save_debug:
+            debug_filename = os.path.basename(image_path).replace('.', f'_debug_{fusion_method}.')
+            debug_path = os.path.join(save_dir, debug_filename)
+            # 保存主要的 debug 資訊（例如 edge mask）
+            if 'edge_mask' in debug_info:
+                cv2.imwrite(debug_path.replace('.', '_edge_mask.'), 
+                           (debug_info['edge_mask'] * 255).astype(np.uint8))
+            if 'structural_mask' in debug_info:
+                cv2.imwrite(debug_path.replace('.', '_structural_mask.'), 
+                           (debug_info['structural_mask'] * 255).astype(np.uint8))
+    
+    out_mask_averaged = torch.nn.functional.avg_pool2d(
+        torch.from_numpy(heatmap).unsqueeze(0).unsqueeze(0).float(), 
+        7, stride=1, padding=3).numpy()
     anomaly_score = np.max(out_mask_averaged)
     
     # 準備視覺化
@@ -120,6 +146,11 @@ def main():
                         help='Number of input channels. If not specified, will try to detect from model.')
     parser.add_argument('--img_size', type=int, nargs=2, default=None,
                         help='Image size for testing as [height, width]. If not specified, will try to detect from model.')
+    parser.add_argument('--fusion_method', type=str, default='none', 
+                        choices=['none', 'intelligent', 'frequency', 'adaptive'],
+                        help='Diff fusion method to enhance small anomaly detection. Options: none (default), intelligent, frequency, adaptive')
+    parser.add_argument('--save_debug', action='store_true',
+                        help='Save debug images from fusion methods (e.g., edge masks)')
     
     args = parser.parse_args()
     
@@ -183,7 +214,8 @@ def main():
     
     if args.image_path:
         # 處理單張圖片
-        visualize_single_image(args.image_path, model, model_seg, save_dir, channels, img_height, img_width, device)
+        visualize_single_image(args.image_path, model, model_seg, save_dir, channels, img_height, img_width, device,
+                             fusion_method=args.fusion_method, save_debug=args.save_debug)
     elif args.test_dir:
         # 處理目錄中的所有圖片
         image_files = []
@@ -194,7 +226,8 @@ def main():
         
         scores = []
         for img_path in image_files[:20]:  # 最多處理20張
-            score = visualize_single_image(img_path, model, model_seg, save_dir, channels, img_height, img_width, device)
+            score = visualize_single_image(img_path, model, model_seg, save_dir, channels, img_height, img_width, device,
+                                         fusion_method=args.fusion_method, save_debug=args.save_debug)
             scores.append(score)
         
         print(f"\nProcessed {len(scores)} images")

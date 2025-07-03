@@ -9,6 +9,8 @@ CHECKPOINT_PATH="./checkpoints"
 GPU_ID=0
 MAX_IMAGES=10
 CUSTOM_DATA_PATH=""
+FUSION_METHOD="none"
+SAVE_DEBUG=false
 
 # 顯示使用說明
 show_help() {
@@ -24,6 +26,8 @@ show_help() {
     echo "  -n, --num NUM              每個類別最多處理幾張圖片（預設：10）"
     echo "  -g, --gpu GPU_ID           指定 GPU ID（預設：0）"
     echo "  -d, --data DATA_PATH       指定資料集路徑（預設：./RSEM_dataset/test）"
+    echo "  -f, --fusion METHOD        融合方法：none, intelligent, frequency, adaptive（預設：none）"
+    echo "  --save-debug               保存融合方法的除錯圖片"
     echo "  -l, --list                 列出可用的模型和類別"
     echo "  -h, --help                 顯示此說明"
     echo ""
@@ -39,6 +43,9 @@ show_help() {
     echo ""
     echo "  # 處理單一類別，每類別5張圖"
     echo "  ./visualize.sh -c good -n 5"
+    echo ""
+    echo "  # 使用智能融合方法處理"
+    echo "  ./visualize.sh -c bent -f intelligent --save-debug"
 }
 
 # 列出可用資源
@@ -104,6 +111,14 @@ while [[ $# -gt 0 ]]; do
             CUSTOM_DATA_PATH="$2"
             shift 2
             ;;
+        -f|--fusion)
+            FUSION_METHOD="$2"
+            shift 2
+            ;;
+        --save-debug)
+            SAVE_DEBUG=true
+            shift
+            ;;
         -l|--list)
             list_resources
             exit 0
@@ -163,12 +178,20 @@ echo "模型：$MODEL_NAME"
 echo "類別：${CATEGORIES[*]}"
 echo "每類別最多：$MAX_IMAGES 張圖片"
 echo "GPU ID：$GPU_ID"
+echo "融合方法：$FUSION_METHOD"
+if [ "$SAVE_DEBUG" = true ]; then
+    echo "保存除錯圖片：是"
+fi
 echo "=========================================="
 echo ""
 
 # 創建輸出目錄
 timestamp=$(date +%Y%m%d_%H%M%S)
-OUTPUT_DIR="./outputs/visualizations/${MODEL_NAME}_${timestamp}"
+if [ "$FUSION_METHOD" != "none" ]; then
+    OUTPUT_DIR="./outputs/visualizations/${MODEL_NAME}_${timestamp}_${FUSION_METHOD}"
+else
+    OUTPUT_DIR="./outputs/visualizations/${MODEL_NAME}_${timestamp}"
+fi
 
 # 處理每個類別
 for category in "${CATEGORIES[@]}"; do
@@ -200,13 +223,15 @@ for category in "${CATEGORIES[@]}"; do
         img_name=$(basename "$img_path")
         echo -n "  處理 $img_name ... "
         
+        # 建構命令
+        cmd="python test_DRAEM.py --model_name \"$MODEL_NAME\" --image_path \"$img_path\" --output_dir \"$category_output\" --gpu_id $GPU_ID --fusion_method $FUSION_METHOD"
+        
+        if [ "$SAVE_DEBUG" = true ]; then
+            cmd="$cmd --save_debug"
+        fi
+        
         # 執行視覺化（隱藏輸出但保留錯誤）
-        output=$(python test_DRAEM.py \
-            --model_name "$MODEL_NAME" \
-            --image_path "$img_path" \
-            --output_dir "$category_output" \
-            --gpu_id $GPU_ID \
-            2>&1 | grep "Anomaly score" | cut -d: -f2 | xargs)
+        output=$(eval $cmd 2>&1 | grep "Anomaly score" | cut -d: -f2 | xargs)
         
         if [ -n "$output" ]; then
             echo "完成 (分數: $output)"
