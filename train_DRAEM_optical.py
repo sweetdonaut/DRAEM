@@ -1,7 +1,7 @@
 """
 OpticalDataset 專用訓練腳本
 支援 32-bit TIFF 圖片格式
-針對非正方形圖片（960x192）優化
+針對 128x128 patches (OpticalDatasetSlide) 優化
 """
 
 import torch
@@ -35,7 +35,7 @@ def train_on_device(obj_names, args):
         run_name = f'DRAEM_optical_{args.lr}_{args.epochs}_bs{args.bs}_ch{args.channels}_{args.img_size[0]}x{args.img_size[1]}'
         
         print(f"\n{'='*60}")
-        print(f"訓練 OpticalDataset 模型")
+        print(f"訓練 OpticalDatasetSlide 模型 (128x128 patches)")
         print(f"模型名稱: {run_name}")
         print(f"圖片尺寸: {args.img_size[0]}x{args.img_size[1]}")
         print(f"通道數: {args.channels}")
@@ -178,16 +178,16 @@ def main():
     parser.add_argument('--lr', action='store', type=float, required=True, help='Learning rate')
     parser.add_argument('--epochs', action='store', type=int, required=True, help='Number of epochs')
     parser.add_argument('--gpu_id', action='store', type=int, default=0, required=False, help='GPU ID')
-    parser.add_argument('--data_path', action='store', type=str, default='./OpticalDataset', 
-                        help='Path to OpticalDataset. Default: ./OpticalDataset')
+    parser.add_argument('--data_path', action='store', type=str, default='./OpticalDatasetSlide', 
+                        help='Path to OpticalDatasetSlide. Default: ./OpticalDatasetSlide')
     parser.add_argument('--anomaly_source_path', action='store', type=str, required=False, default=None,
                         help='Path to anomaly source images. If not provided, random noise will be used.')
     parser.add_argument('--checkpoint_path', action='store', type=str, default='./checkpoints',
                         help='Path to save checkpoints. Default: ./checkpoints')
     parser.add_argument('--channels', action='store', type=int, default=1, choices=[1, 3],
                         help='Number of input channels (1 for grayscale, 3 for RGB). Default: 1')
-    parser.add_argument('--img_size', action='store', type=int, nargs=2, default=[960, 192],
-                        help='Image size for training as [height, width]. Default: [960, 192]')
+    parser.add_argument('--img_size', action='store', type=int, nargs=2, default=[128, 128],
+                        help='Image size for training as [height, width]. Default: [128, 128]')
     parser.add_argument('--num_workers', action='store', type=int, default=4,
                         help='Number of data loading workers. Default: 4')
 

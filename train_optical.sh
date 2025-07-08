@@ -1,17 +1,17 @@
 #!/bin/bash
-# OpticalDataset 訓練腳本 (32-bit TIFF)
+# OpticalDatasetSlide 訓練腳本 (128x128 patches)
 
 echo "=========================================="
-echo "訓練 OpticalDataset (32-bit TIFF)"
+echo "訓練 OpticalDatasetSlide (128x128 patches)"
 echo "使用專用腳本 train_DRAEM_optical.py"
 echo "=========================================="
 echo ""
 
 # 預設值
 CHANNELS=1
-IMG_HEIGHT=960
-IMG_WIDTH=192
-BATCH_SIZE=3
+IMG_HEIGHT=128
+IMG_WIDTH=128
+BATCH_SIZE=8
 EPOCHS=1
 LR=0.0001
 GPU_ID=0
@@ -35,7 +35,7 @@ python train_DRAEM_optical.py \
     --lr $LR \
     --bs $BATCH_SIZE \
     --epochs $EPOCHS \
-    --data_path ./OpticalDataset \
+    --data_path ./OpticalDatasetSlide \
     --checkpoint_path ./checkpoints/ \
     --channels $CHANNELS \
     --img_size $IMG_HEIGHT $IMG_WIDTH \

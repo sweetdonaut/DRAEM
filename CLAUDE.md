@@ -19,6 +19,12 @@
 - WHEN user asks a new question, respond to it directly before returning to previous work
 - ONLY return to previous tasks after explicit confirmation from the user
 
+### Testing Workflow
+- COMPLETE one task and show results before proceeding to the next
+- WAIT for user confirmation after presenting results
+- DO NOT rush to implement multiple steps without verification
+- PRESENT test results clearly and ask for approval before continuing
+
 ## Code Style Rules
 
 ### General Principles
@@ -38,3 +44,11 @@
 - ALWAYS explain what changes you're making and why
 - TEST your understanding by asking clarifying questions when needed
 - NEVER assume implementation details - ask for clarification
+
+## Dataset-Specific Guidelines
+
+This project contains processing workflows for multiple datasets. Related documentation:
+- Optical dataset: CLAUDE_optical.md
+- [Future datasets]: CLAUDE_[dataset].md
+
+When discussing a specific dataset, please explicitly mention which documentation file to reference.

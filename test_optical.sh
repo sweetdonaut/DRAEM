@@ -1,18 +1,19 @@
 #!/bin/bash
 
-# DRAEM OpticalDataset 統一視覺化腳本
-# 支援選擇模型、選擇測試類別、批次處理
+# DRAEM OpticalDataset 滑動視窗測試腳本
+# 支援選擇模型、選擇測試類別、批次處理、融合方法選擇
 
 # 預設值
-DATA_PATH="./OpticalDataset/test"
+DATA_PATH="./OpticalDatasetSlide/test"
 CHECKPOINT_PATH="./checkpoints"
 GPU_ID=0
 MAX_IMAGES=10
 CUSTOM_DATA_PATH=""
+MERGE_METHOD="both"  # max, average, or both
 
 # 顯示使用說明
 show_help() {
-    echo "DRAEM OpticalDataset 視覺化工具"
+    echo "DRAEM OpticalDataset 滑動視窗測試工具"
     echo ""
     echo "使用方法："
     echo "  ./test_optical.sh [選項]"
@@ -23,7 +24,8 @@ show_help() {
     echo "  -a, --all                  處理所有類別"
     echo "  -n, --num NUM              每個類別最多處理幾張圖片（預設：10）"
     echo "  -g, --gpu GPU_ID           指定 GPU ID（預設：0）"
-    echo "  -d, --data DATA_PATH       指定資料集路徑（預設：./OpticalDataset/test）"
+    echo "  -d, --data DATA_PATH       指定資料集路徑（預設：./OpticalDatasetSlide/test）"
+    echo "  -f, --fusion METHOD        融合方法：max, average, both（預設：both）"
     echo "  -l, --list                 列出可用的模型和類別"
     echo "  -h, --help                 顯示此說明"
     echo ""
@@ -35,10 +37,13 @@ show_help() {
     echo "  ./test_optical.sh -a"
     echo ""
     echo "  # 指定模型，處理特定類別"
-    echo "  ./test_optical.sh -m DRAEM_optical_0.0001_700_bs3_ch1_960x192 -c bent -c broken"
+    echo "  ./test_optical.sh -m DRAEM_optical_0.0001_10_bs8_ch1_128x128 -c bent -c broken"
     echo ""
-    echo "  # 處理單一類別，每類別5張圖"
-    echo "  ./test_optical.sh -c good -n 5"
+    echo "  # 處理單一類別，每類別5張圖，只用最大值融合"
+    echo "  ./test_optical.sh -c good -n 5 -f max"
+    echo ""
+    echo "  # 處理所有類別，使用兩種融合方法"
+    echo "  ./test_optical.sh -a -f both"
 }
 
 # 列出可用資源
@@ -104,6 +109,10 @@ while [[ $# -gt 0 ]]; do
             CUSTOM_DATA_PATH="$2"
             shift 2
             ;;
+        -f|--fusion)
+            MERGE_METHOD="$2"
+            shift 2
+            ;;
         -l|--list)
             list_resources
             exit 0
@@ -155,14 +164,22 @@ elif [ ${#CATEGORIES[@]} -eq 0 ]; then
     exit 1
 fi
 
+# 驗證融合方法
+if [[ "$MERGE_METHOD" != "max" && "$MERGE_METHOD" != "average" && "$MERGE_METHOD" != "both" ]]; then
+    echo "錯誤：無效的融合方法 '$MERGE_METHOD'"
+    echo "請使用 max, average 或 both"
+    exit 1
+fi
+
 # 開始處理
 echo ""
 echo "=========================================="
-echo "DRAEM OpticalDataset 視覺化"
+echo "DRAEM OpticalDataset 滑動視窗測試"
 echo "模型：$MODEL_NAME"
 echo "類別：${CATEGORIES[*]}"
 echo "每類別最多：$MAX_IMAGES 張圖片"
 echo "GPU ID：$GPU_ID"
+echo "融合方法：$MERGE_METHOD"
 echo "=========================================="
 echo ""
 
@@ -198,21 +215,49 @@ for category in "${CATEGORIES[@]}"; do
     # 處理每張圖片
     for img_path in "${images[@]}"; do
         img_name=$(basename "$img_path")
-        echo -n "  處理 $img_name ... "
+        echo "  處理 $img_name ..."
         
-        # 執行視覺化（隱藏輸出但保留錯誤）
-        output=$(python test_DRAEM_optical.py \
+        # 根據融合方法設定參數
+        if [[ "$MERGE_METHOD" == "both" ]]; then
+            merge_arg=""
+        else
+            merge_arg="--merge_method $MERGE_METHOD"
+        fi
+        
+        # 執行滑動視窗測試
+        python test_DRAEM_optical_slide.py \
             --model_name "$MODEL_NAME" \
             --image_path "$img_path" \
             --output_dir "$category_output" \
             --gpu_id $GPU_ID \
-            2>&1 | grep "異常分數" | cut -d: -f2 | xargs)
+            --test_sliding_window \
+            $merge_arg \
+            2>&1 | while IFS= read -r line; do
+                # 過濾並格式化輸出
+                if [[ "$line" == *"✓ 滑動視窗推論測試成功"* ]]; then
+                    echo "    ✓ 推論成功"
+                elif [[ "$line" == *"提取了"*"個 patches"* ]]; then
+                    echo "    $line" | sed 's/^[ ]*/    /'
+                elif [[ "$line" == *"異常分數範圍"* ]]; then
+                    echo "    $line" | sed 's/^[ ]*/    /'
+                elif [[ "$line" == *"平均異常分數"* ]]; then
+                    echo "    $line" | sed 's/^[ ]*/    /'
+                elif [[ "$line" == *"結果儲存至"* ]]; then
+                    # 根據融合方法決定是否顯示
+                    if [[ "$MERGE_METHOD" == "both" ]]; then
+                        echo "    $line" | sed 's/^[ ]*/    /'
+                    elif [[ "$MERGE_METHOD" == "max" && "$line" == *"_max.png"* ]]; then
+                        echo "    $line" | sed 's/^[ ]*/    /'
+                    elif [[ "$MERGE_METHOD" == "average" && "$line" == *"_average.png"* ]]; then
+                        echo "    $line" | sed 's/^[ ]*/    /'
+                    fi
+                elif [[ "$line" == *"✗ 滑動視窗推論測試失敗"* ]]; then
+                    echo "    ✗ 推論失敗"
+                    echo "    $line" | sed 's/^[ ]*/    /'
+                fi
+            done
         
-        if [ -n "$output" ]; then
-            echo "完成 (分數: $output)"
-        else
-            echo "失敗"
-        fi
+        echo ""
     done
     
     echo "  結果儲存在：$category_output"
