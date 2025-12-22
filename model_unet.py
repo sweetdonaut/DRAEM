@@ -502,3 +502,31 @@ class DecoderReconstructiveWithSkip(nn.Module):
 
         out = self.fin_out(db4)
         return out
+
+
+class ReconstructiveVAE(nn.Module):
+    def __init__(self, in_channels=3, out_channels=3, base_width=128):
+        super(ReconstructiveVAE, self).__init__()
+        self.encoder = EncoderReconstructive(in_channels, base_width)
+        self.fc_mu = nn.Conv2d(base_width * 8, base_width * 8, kernel_size=1)
+        self.fc_logvar = nn.Conv2d(base_width * 8, base_width * 8, kernel_size=1)
+        self.decoder = DecoderReconstructive(base_width, out_channels=out_channels)
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        logvar = self.fc_logvar(h)
+        z = self.reparameterize(mu, logvar)
+        output = self.decoder(z)
+        return output, mu, logvar
+
+    def reconstruct(self, x):
+        h = self.encoder(x)
+        mu = self.fc_mu(h)
+        output = self.decoder(mu)
+        return output
